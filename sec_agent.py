@@ -10,7 +10,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-# قاعدة بيانات OUI للأجهزة الشائعة
 OUI_DATABASE = {
     "00:1E:10": "Huawei", "B0:D5:9D": "Huawei Technologies", "F4:C7:14": "Huawei", "D8:24:BD": "Huawei",
     "00:1A:11": "Google", "D4:F5:47": "Google",
@@ -25,8 +24,11 @@ OUI_DATABASE = {
 }
 
 def get_mac_address(ip: str) -> str:
-    """استخراج عنوان MAC من جدول ARP للنظام"""
+    """استخراج عنوان MAC مع تنشيط كاش ARP مسبقاً"""
     try:
+        # إرسال بنق سريع خفيف لتسجيل الجهاز في جدول ARP
+        subprocess.run(["ping", "-c", "1", "-W", "1", ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
         if os.path.exists("/proc/net/arp"):
             with open("/proc/net/arp", "r") as f:
                 for line in f.readlines()[1:]:
@@ -35,6 +37,7 @@ def get_mac_address(ip: str) -> str:
                         mac = parts[3].upper()
                         if mac != "00:00:00:00:00:00":
                             return mac
+                            
         res = subprocess.run(["ip", "neigh", "show", ip], capture_output=True, text=True, timeout=2)
         if res.returncode == 0 and "lladdr" in res.stdout:
             parts = res.stdout.strip().split()
@@ -45,20 +48,27 @@ def get_mac_address(ip: str) -> str:
     return "Unknown"
 
 def lookup_vendor(mac: str) -> str:
-    """تحديد الشركة المصنعة استناداً إلى OUI"""
     if not mac or mac == "Unknown":
         return "Unknown"
     oui = ":".join(mac.split(":")[:3]).upper()
     return OUI_DATABASE.get(oui, "Generic / Unregistered Vendor")
 
 def get_local_subnet() -> str:
-    """كشف النطاق الفرعي النشط تلقائياً"""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
             return ".".join(s.getsockname()[0].split(".")[:3])
     except Exception:
         return "192.168.8"
+
+def assess_risk(port_open: bool, meta: dict) -> tuple:
+    """تقييم الخطورة الأمنية بناءً على استجابة الخدمة المفتوحة"""
+    if not port_open:
+        return "LOW", "#10b981"
+    # إذا كان ADB متصلاً وجلب طراز النظام بدون حظر
+    if meta.get("model") != "Unknown":
+        return "CRITICAL", "#ef4444"
+    return "HIGH", "#f97316"
 
 def export_html_report(report_data: dict, output_path: str):
     findings_rows = ""
@@ -70,6 +80,8 @@ def export_html_report(report_data: dict, output_path: str):
         meta = item.get("fingerprint", {})
         model = meta.get("model", "Unknown")
         android = meta.get("android_version", "Unknown")
+        risk_level = item.get("risk_level", "UNKNOWN")
+        risk_color = item.get("risk_color", "#94a3b8")
 
         findings_rows += f"""
         <tr>
@@ -77,7 +89,7 @@ def export_html_report(report_data: dict, output_path: str):
             <td><code>{mac}</code></td>
             <td>{vendor}</td>
             <td>{port}</td>
-            <td><span class="badge open">OPEN</span></td>
+            <td><span class="badge" style="background-color: {risk_color}; color: #fff;">{risk_level}</span></td>
             <td>{model}</td>
             <td>{android}</td>
         </tr>
@@ -101,8 +113,7 @@ def export_html_report(report_data: dict, output_path: str):
         th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #334155; }}
         th {{ background: #0f172a; color: #cbd5e1; }}
         code {{ background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #38bdf8; }}
-        .badge {{ padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }}
-        .open {{ background: #ef4444; color: white; }}
+        .badge {{ padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; text-transform: uppercase; }}
     </style>
 </head>
 <body>
@@ -121,7 +132,7 @@ def export_html_report(report_data: dict, output_path: str):
                     <th>MAC Address</th>
                     <th>Vendor</th>
                     <th>Port</th>
-                    <th>Status</th>
+                    <th>Risk Level</th>
                     <th>Device Model</th>
                     <th>Android Version</th>
                 </tr>
@@ -215,11 +226,15 @@ class TermuxSecAgent:
             meta = self.fingerprint_device(host)
             mac = get_mac_address(host)
             vendor = lookup_vendor(mac)
+            risk_label, risk_color = assess_risk(True, meta)
+
             findings.append({
                 "ip": host,
                 "mac": mac,
                 "vendor": vendor,
                 "port": self.adb_port,
+                "risk_level": risk_label,
+                "risk_color": risk_color,
                 "fingerprint": meta
             })
 
