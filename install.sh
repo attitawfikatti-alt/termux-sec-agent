@@ -15,7 +15,9 @@ pip install requests
 # 3. منح الصلاحيات التنفيذية للسكريبتات
 echo "[+] ضبط صلاحيات التنفيذ..."
 chmod +x ~/termux-sec-agent/*.py
+ln -sf ~/termux-sec-agent/sec-agent $PREFIX/bin/sec-agent
 chmod +x ~/termux-sec-agent/*.sh
+ln -sf ~/termux-sec-agent/sec-agent $PREFIX/bin/sec-agent
 
 # 4. إعداد ملف الأجهزة الموثوقة الافتراضي إذا لم يكن موجوداً
 if [ ! -f ~/termux-sec-agent/trusted_macs.txt ]; then
@@ -41,6 +43,7 @@ pgrep crond > /dev/null || crond
 pgrep -f watchdog.py > /dev/null || nohup python3 -u ~/termux-sec-agent/watchdog.py > ~/termux-sec-agent/watchdog.log 2>&1 &
 BOOT_EOF
 chmod +x ~/.termux/boot/start-sec-agent.sh
+ln -sf ~/termux-sec-agent/sec-agent $PREFIX/bin/sec-agent
 
 echo "============================================="
 echo "[✓] اكتمل التثبيت بنجاح!"

@@ -15,3 +15,13 @@ git clone git@github.com:attitawfikatti-alt/termux-sec-agent.git ~/termux-sec-ag
 cd ~/termux-sec-agent
 bash install.sh
 ```
+
+## أوامر الإدارة السريعة (sec-agent)
+
+| الأمر | الوظيفة |
+|---|---|
+| `sec-agent start` | تشغيل الحارس وخدمات المراقبة بالخلفية |
+| `sec-agent stop` | إيقاف الحارس والخدمات وتحرير المعالج |
+| `sec-agent status` | عرض حالة العمليات والجدولة الحالية |
+| `sec-agent scan` | تنفيذ فحص فوري ومباشر للشبكة |
+| `sec-agent logs` | استعراض آخر سجلات الفحص والأمان |
