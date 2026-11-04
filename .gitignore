@@ -3,3 +3,5 @@ trusted_devices.txt
 trusted_macs.txt
 __pycache__/
 .env
+telegram_config.json
+missing_tracker.json

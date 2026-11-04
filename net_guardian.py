@@ -2,17 +2,23 @@
 import subprocess
 import re
 import os
-import sys
+import json
 
 BASE_DIR = os.path.expanduser("~/termux-sec-agent")
 TRUSTED_FILE = os.path.join(BASE_DIR, "trusted_macs.txt")
 AUDIT_LOG = os.path.join(BASE_DIR, "network_audit.log")
+TRACKER_FILE = os.path.join(BASE_DIR, "missing_tracker.json")
 
-SENSITIVE_PORTS = {
-    5555: "ADB تصحيح لاسلكي",
-    23: "Telnet غير مشفر",
-    22: "SSH",
-    80: "HTTP Web"
+# عنوان بوابة الراوتر الافتراضية
+ROUTER_IP = "192.168.8.1"
+MISSING_THRESHOLD = 3
+
+TARGET_PORTS = {
+    5555: "ADB Wireless Debugging",
+    22: "SSH Server",
+    23: "Telnet",
+    80: "HTTP Web Management",
+    8080: "HTTP Proxy/Alternative Web"
 }
 
 def send_alert(title, msg):
@@ -27,44 +33,58 @@ def load_trusted_macs():
     with open(TRUSTED_FILE, "r") as f:
         return set(line.strip().upper() for line in f if line.strip() and not line.startswith("#"))
 
+def load_tracker():
+    if os.path.exists(TRACKER_FILE):
+        try:
+            with open(TRACKER_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_tracker(tracker):
+    with open(TRACKER_FILE, "w") as f:
+        json.dump(tracker, f)
+
 def scan_network_layer2():
-    # إنعاش جدول ARP بشكل سريع ومتوازي
     subprocess.run("for i in $(seq 1 254); do ping -c 1 -W 1 192.168.8.$i >/dev/null 2>&1 & done; sleep 2", shell=True)
-    
-    # قراءة جدول الجيران
     devices = {}
     try:
         out = subprocess.check_output("ip neigh show", shell=True).decode()
         for line in out.splitlines():
-            # استخراج IP و MAC
             m = re.search(r"([\d\.]+)\s+dev\s+\w+\s+lladdr\s+([a-fA-F0-9:]{17})", line)
             if m:
                 ip, mac = m.group(1), m.group(2).upper()
                 devices[mac] = ip
     except Exception as e:
-        print(f"[!] خطأ في قراءة جدول الجيران: {e}")
+        print(f"[!] خطأ في فحص جدول الجيران: {e}")
     return devices
 
-def check_ports(ip):
-    open_ports = []
-    cmd = f"nmap -sT -p 22,23,80,5555 -T4 --open {ip}"
+def audit_target_ports(ip):
+    open_found = {}
+    ports_str = ",".join(str(p) for p in TARGET_PORTS.keys())
+    cmd = f"nmap -sT -p {ports_str} -T4 --open {ip}"
     try:
-        out = subprocess.check_output(cmd, shell=True, timeout=30).decode()
+        out = subprocess.check_output(cmd, shell=True, timeout=25).decode()
         for line in out.splitlines():
             pm = re.search(r"^(\d+)/tcp\s+open", line)
             if pm:
-                open_ports.append(int(pm.group(1)))
+                p_num = int(pm.group(1))
+                open_found[p_num] = TARGET_PORTS.get(p_num, "خدمة غير معروفة")
     except Exception:
         pass
-    return open_ports
+    return open_found
 
 def run_guard():
-    print("[+] بدء تدقيق الشبكة...")
+    print("[+] بدء تدقيق أمان الشبكة والمنافذ الحساسة...")
     active_devices = scan_network_layer2()
     trusted_macs = load_trusted_macs()
+    tracker = load_tracker()
 
+    active_macs = set(active_devices.keys())
     new_intruders = []
-    ports_alert = []
+    adb_foreign_vulnerable = []
+    confirmed_missing = []
 
     report_lines = [f"إجمالي الأجهزة النشطة: {len(active_devices)}"]
 
@@ -72,33 +92,52 @@ def run_guard():
         is_known = mac in trusted_macs
         status_tag = "موثوق" if is_known else "⚠️ دخيل/غير معروف"
         
+        if mac in tracker:
+            del tracker[mac]
+
         if not is_known:
             new_intruders.append(f"{ip} ({mac})")
 
-        # فحص منافذ الجهاز
-        ports = check_ports(ip)
-        port_desc = [SENSITIVE_PORTS.get(p, f"Port {p}") for p in ports]
-        
-        if ports:
-            ports_alert.append(f"{ip} [{', '.join(port_desc)}]")
+        open_ports = audit_target_ports(ip)
+        port_notes = []
+        if open_ports:
+            for p, desc in open_ports.items():
+                port_notes.append(f"Port {p} ({desc})")
+                # رصد ADB الخطر فقط إذا كان على جهاز طرفي وليس الراوتر المعروف
+                if p == 5555 and ip != ROUTER_IP:
+                    adb_foreign_vulnerable.append(f"{ip} ({mac})")
 
-        report_lines.append(f"  - IP: {ip:<15} MAC: {mac} [{status_tag}]")
+        extra_info = f" -> [منافذ مفتوحة: {', '.join(port_notes)}]" if port_notes else ""
+        report_lines.append(f"  - IP: {ip:<15} MAC: {mac} [{status_tag}]{extra_info}")
 
-    print("\n--- تقرير الفحص المحدث ---")
+    missing_now = trusted_macs - active_macs
+    for mm in missing_now:
+        tracker[mm] = tracker.get(mm, 0) + 1
+        count = tracker[mm]
+        if count >= MISSING_THRESHOLD:
+            confirmed_missing.append(mm)
+            report_lines.append(f"  - ⚠️ غياب مؤكد ({count} دورات): MAC {mm}")
+        else:
+            report_lines.append(f"  - ⏳ في وضع خمول مؤقت ({count}/{MISSING_THRESHOLD}): MAC {mm}")
+
+    save_tracker(tracker)
+
     full_report = "\n".join(report_lines)
+    print("\n--- تقرير الفحص والتدقيق ---")
     print(full_report)
 
-    # حفظ في السجل
     with open(AUDIT_LOG, "a") as f:
-        f.write(f"\n--- فحص بتاريخ جديد ---\n{full_report}\n")
+        f.write(f"\n--- فحص تدقيق أمني ---\n{full_report}\n")
 
-    # إرسال التنبيهات
-    if new_intruders:
-        send_alert("🚨 تنبيه: جهاز جديد بالشبكة!", f"تم رصد: {new_intruders[0]}")
-    elif ports_alert:
-        send_alert("⚠️ منافذ مفتوحة مرصودة", f"{ports_alert[0]}")
+    # توجيه التنبيهات
+    if adb_foreign_vulnerable:
+        send_alert("🚨 ثغرة أمنية حرجة!", f"جهاز طرفي يفتح ADB: {adb_foreign_vulnerable[0]}")
+    elif new_intruders:
+        send_alert("🚨 جهاز غريب بالشبكة!", f"تم رصد: {new_intruders[0]}")
+    elif confirmed_missing:
+        send_alert("⚠️ انقطاع مؤكد لجهاز موثوق!", f"انقطع اتصال {len(confirmed_missing)} أجهزة مسجلة")
     else:
-        send_alert("حارس الشبكة", f"الشبكة آمنة: {len(active_devices)} أجهزة متصلة وموثوقة.")
+        print("[✓] الوضع مستقر ولا توجد تهديدات طارئة.")
 
 if __name__ == "__main__":
     run_guard()
