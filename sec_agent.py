@@ -143,16 +143,23 @@ class TermuxSecAgent:
         discovered_targets = []
         start_time = datetime.now()
 
+        scanned_count = 0
         def probe(last_octet):
+            nonlocal scanned_count
             target_ip = f"{self.subnet}.{last_octet}"
             if stealth_mode:
                 time.sleep(random.uniform(0.1, 0.4))
             if self.check_port(target_ip):
-                print(f"[!] Discovered: {target_ip}:{self.adb_port}")
+                sys.stdout.write(f"\r[!] Discovered: {target_ip}:{self.adb_port}           \n")
+                sys.stdout.flush()
                 discovered_targets.append(target_ip)
+            scanned_count += 1
+            sys.stdout.write(f"\r[*] Scanning progress: [{scanned_count}/254] hosts...")
+            sys.stdout.flush()
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             executor.map(probe, range(1, 255))
+        print()
 
         findings = []
         for host in discovered_targets:
