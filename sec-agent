@@ -1,0 +1,96 @@
+#!/data/data/com.termux/files/usr/bin/bash
+
+BASE_DIR="$HOME/termux-sec-agent"
+LOG_DIR="$BASE_DIR"
+
+case "$1" in
+    start)
+        echo "[+] تشغيل منظومة المراقبة الأوتوماتيكية..."
+        termux-wake-lock 2>/dev/null
+        pgrep crond > /dev/null || crond
+        pgrep -x sshd > /dev/null || sshd
+        if pgrep -f "watchdog.py" > /dev/null; then
+            echo "[!] Watchdog يعمل مسبقاً (PID: $(pgrep -f watchdog.py))."
+        else
+            nohup python3 -u "$BASE_DIR/watchdog.py" > "$LOG_DIR/watchdog.log" 2>&1 &
+            echo "[✓] تم تشغيل Watchdog بنجاح."
+        fi
+        ;;
+
+    stop)
+        echo "[-] إيقاف خدمات المراقبة..."
+        pkill -f "watchdog.py" && echo "[✓] تم إيقاف Watchdog." || echo "[!] Watchdog غير مشغل."
+        pkill crond && echo "[✓] تم إيقاف crond." || echo "[!] crond غير مشغل."
+        termux-wake-unlock 2>/dev/null
+        echo "[✓] تم تحرير قفل المعالج (Wake Lock)."
+        ;;
+
+    status)
+        echo "=== [TERMUX SECURITY AGENT STATUS] ==="
+        echo -n "Watchdog: "
+        pgrep -f "watchdog.py" > /dev/null && echo "نشط (PID: $(pgrep -f watchdog.py))" || echo "متوقف"
+        echo -n "Crond:    "
+        pgrep crond > /dev/null && echo "نشط (PID: $(pgrep crond))" || echo "متوقف"
+        echo -n "SSHD:     "
+        pgrep -x sshd > /dev/null && echo "نشط (PID: $(pgrep -x sshd))" || echo "متوقف"
+        echo "--------------------------------------"
+        echo "مهام Cron المسجلة:"
+        crontab -l 2>/dev/null || echo "لا توجد مهام"
+        echo "======================================"
+        ;;
+
+    health)
+        echo "=== [فحص استهلاك الموارد وحالة النظام] ==="
+        echo "--- حالة البطارية (مباشر من النظام) ---"
+        BAT_PATH="/sys/class/power_supply/battery"
+        if [ -d "$BAT_PATH" ]; then
+            CAPACITY=$(cat "$BAT_PATH/capacity" 2>/dev/null)
+            STATUS=$(cat "$BAT_PATH/status" 2>/dev/null)
+            TEMP=$(cat "$BAT_PATH/temp" 2>/dev/null)
+            [ -n "$CAPACITY" ] && echo "نسبة الشحن:  $CAPACITY%"
+            [ -n "$STATUS" ] && echo "حالة الشحن:  $STATUS"
+            [ -n "$TEMP" ] && echo "درجة الحرارة: $((TEMP / 10))°C"
+        elif command -v timeout >/dev/null && command -v termux-battery-status >/dev/null; then
+            timeout 2s termux-battery-status 2>/dev/null | grep -E '"percentage"|"temperature"|"status"' | tr -d '," ' || echo "غير متوفر"
+        else
+            echo "تعذر قراءة متحسس البطارية."
+        fi
+        echo "--------------------"
+        echo "--- استهلاك الذاكرة والمعالج ---"
+        ps -ef 2>/dev/null | grep -E 'python3|crond|sshd' | grep -v grep | awk '{printf "PID: %-6s CMD: %-15s\n", $2, $8}'
+        echo "--------------------"
+        echo "--- حجم السجلات النشطة ---"
+        ls -lh "$LOG_DIR"/*.log 2>/dev/null | awk '{printf "%-20s %s\n", $9, $5}' || echo "لا توجد سجلات."
+        echo "======================================"
+        ;;
+
+    clean)
+        echo "[+] تنظيف السجلات المؤقتة وتدوير ملفات Log..."
+        for logfile in "$LOG_DIR"/*.log; do
+            if [ -f "$logfile" ]; then
+                tail -n 100 "$logfile" > "$logfile.tmp" && mv "$logfile.tmp" "$logfile"
+                echo "[✓] تم تقليص $(basename "$logfile") إلى آخر 100 سطر."
+            fi
+        done
+        rm -f "$BASE_DIR/missing_tracker.json"
+        echo "[✓] تم تصفير سجلات التتبع المؤقتة."
+        ;;
+
+    scan)
+        echo "[+] تشغيل فحص يدوي فوري للشبكة..."
+        python3 "$BASE_DIR/net_guardian.py"
+        ;;
+
+    logs)
+        echo "=== آخر 15 سطراً من سجل فحص الشبكة ==="
+        tail -n 15 "$LOG_DIR/network_audit.log" 2>/dev/null || echo "لا يوجد سجل network_audit.log بعد."
+        echo ""
+        echo "=== آخر 10 أسطر من سجل الحارس Watchdog ==="
+        tail -n 10 "$LOG_DIR/watchdog.log" 2>/dev/null || echo "لا يوجد سجل watchdog.log بعد."
+        ;;
+
+    *)
+        echo "الاستخدام: sec-agent {start|stop|status|health|clean|scan|logs}"
+        exit 1
+        ;;
+esac
