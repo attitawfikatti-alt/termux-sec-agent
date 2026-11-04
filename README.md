@@ -1,32 +1,23 @@
 # Termux Security Agent (termux-sec-agent)
 
-An automated security scanning and monitoring utility designed for Android environments via Termux.
+An automated network service auditor and device inspection tool tailored for Termux on Android.
 
 ## Features
-- Local network auditing & device discovery.
-- Automated security checks.
-- Structured logging and report generation.
+- **Subnet Auditing:** Scan `/24` subnets concurrently for target ports.
+- **Stealth Mode:** Rate-limited single-worker scanning with randomized jitter.
+- **Dual Reporting:** Generates audit logs in structured JSON and mobile-friendly HTML.
+- **Device Fingerprinting:** Captures basic device metadata over open ports.
 
 ## Installation
 ```bash
-pkg update && pkg install python git -y
+pkg update && pkg install git python android-tools termux-api -y
 git clone [https://github.com/attitawfikatti-alt/termux-sec-agent.git](https://github.com/attitawfikatti-alt/termux-sec-agent.git)
 cd termux-sec-agent
-pip install -r requirements.txt
-python sec_agent.py# Termux Security Agent (termux-sec-agent)
+chmod +x agent.py
+```
 
-An automated security scanning and monitoring utility designed for Android environments via Termux.
-
-## Features
-- Local network auditing & device discovery.
-- Automated security checks.
-- Structured logging and report generation.
-
-## Installation
+## Usage
 ```bash
-pkg update && pkg install python git -y
-git clone [https://github.com/attitawfikatti-alt/termux-sec-agent.git](https://github.com/attitawfikatti-alt/termux-sec-agent.git)
-cd termux-sec-agent
-pip install -r requirements.txt
-python sec_agent.py
+python agent.py -s 192.168.8 -p 5555
+python agent.py -s 192.168.8 --stealth -o html
 ```
