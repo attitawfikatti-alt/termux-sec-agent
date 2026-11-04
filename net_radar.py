@@ -17,7 +17,7 @@ TARGET_PORTS = {
     443: "HTTPS",
     22: "SSH",
     53: "DNS"
-}
+5555: "ADB" }
 
 def get_default_gateway_and_subnet():
     try:
@@ -124,3 +124,5 @@ if __name__ == "__main__":
         cidr = auto_cidr
 
     run_radar(cidr)
+
+
