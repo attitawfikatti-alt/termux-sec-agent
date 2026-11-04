@@ -1,16 +1,5 @@
-# Ignore log files
-logs/*.log
-logs/*
-!logs/.gitkeep
-
-# Ignore scan reports
-reports/*.json
-reports/*.txt
-reports/*
-!reports/.gitkeep
-
-# Python cache
+*.log
+trusted_devices.txt
+trusted_macs.txt
 __pycache__/
-*.pyc
-*.pyo
 .env
