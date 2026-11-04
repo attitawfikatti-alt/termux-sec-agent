@@ -57,7 +57,7 @@ tools_schema = [
 ]
 
 # استخدام النموذج الأحدث والمستقر
-url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={api_key}"
 headers = {"Content-Type": "application/json"}
 
 def run_agent(input_arg: str):
@@ -85,11 +85,22 @@ def run_agent(input_arg: str):
             "tools": tools_schema
         }
 
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            res = response.json()
-        except requests.exceptions.RequestException as e:
-            print(f"\033[1;31m[-] فشل الاتصال بالخادم:\033[0m {e}")
+        import time
+        res = None
+        for attempt in range(1, 4):
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=30)
+                res = response.json()
+                if "error" in res and "high demand" in str(res["error"]):
+                    print(f"[*] الخادم مشغول، إعادة المحاولة ({attempt}/3) بعد {attempt * 3} ثوانٍ...")
+                    time.sleep(attempt * 3)
+                    continue
+                break
+            except requests.exceptions.RequestException as e:
+                print(f"[-] خطأ شبكة (محاولة {attempt}/3): {e}")
+                time.sleep(2)
+        if not res:
+            print("\033[1;31m[-] تعذر الوصول للخادم بعد 3 محاولات.\033[0m")
             return
 
         if "error" in res:
