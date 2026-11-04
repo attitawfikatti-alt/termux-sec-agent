@@ -10,11 +10,62 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
+# قاعدة بيانات OUI للأجهزة الشائعة
+OUI_DATABASE = {
+    "00:1E:10": "Huawei", "B0:D5:9D": "Huawei Technologies", "F4:C7:14": "Huawei", "D8:24:BD": "Huawei",
+    "00:1A:11": "Google", "D4:F5:47": "Google",
+    "AC:5F:3E": "Samsung", "34:42:62": "Samsung", "E4:7E:66": "Samsung",
+    "64:A2:F9": "Xiaomi", "78:11:DC": "Xiaomi",
+    "B4:60:77": "Apple", "F0:99:B6": "Apple",
+    "24:0A:C4": "Espressif (ESP32/ESP8266)", "30:AE:A4": "Espressif",
+    "B8:27:EB": "Raspberry Pi", "DC:A6:32": "Raspberry Pi",
+    "00:50:56": "VMware", "08:00:27": "Oracle VirtualBox",
+    "FC:EC:DA": "Ubiquiti", "00:27:22": "Ubiquiti",
+    "00:0C:43": "Ralink Technology", "10:7B:44": "TP-Link", "50:D4:F7": "TP-Link"
+}
+
+def get_mac_address(ip: str) -> str:
+    """استخراج عنوان MAC من جدول ARP للنظام"""
+    try:
+        if os.path.exists("/proc/net/arp"):
+            with open("/proc/net/arp", "r") as f:
+                for line in f.readlines()[1:]:
+                    parts = line.split()
+                    if len(parts) >= 4 and parts[0] == ip:
+                        mac = parts[3].upper()
+                        if mac != "00:00:00:00:00:00":
+                            return mac
+        res = subprocess.run(["ip", "neigh", "show", ip], capture_output=True, text=True, timeout=2)
+        if res.returncode == 0 and "lladdr" in res.stdout:
+            parts = res.stdout.strip().split()
+            idx = parts.index("lladdr")
+            return parts[idx + 1].upper()
+    except Exception:
+        pass
+    return "Unknown"
+
+def lookup_vendor(mac: str) -> str:
+    """تحديد الشركة المصنعة استناداً إلى OUI"""
+    if not mac or mac == "Unknown":
+        return "Unknown"
+    oui = ":".join(mac.split(":")[:3]).upper()
+    return OUI_DATABASE.get(oui, "Generic / Unregistered Vendor")
+
+def get_local_subnet() -> str:
+    """كشف النطاق الفرعي النشط تلقائياً"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return ".".join(s.getsockname()[0].split(".")[:3])
+    except Exception:
+        return "192.168.8"
+
 def export_html_report(report_data: dict, output_path: str):
-    """توليد ملف HTML منسق يعرض نتائج الفحص"""
     findings_rows = ""
     for item in report_data.get("findings", []):
         ip = item.get("ip", "N/A")
+        mac = item.get("mac", "Unknown")
+        vendor = item.get("vendor", "Unknown")
         port = item.get("port", "N/A")
         meta = item.get("fingerprint", {})
         model = meta.get("model", "Unknown")
@@ -23,6 +74,8 @@ def export_html_report(report_data: dict, output_path: str):
         findings_rows += f"""
         <tr>
             <td>{ip}</td>
+            <td><code>{mac}</code></td>
+            <td>{vendor}</td>
             <td>{port}</td>
             <td><span class="badge open">OPEN</span></td>
             <td>{model}</td>
@@ -31,7 +84,7 @@ def export_html_report(report_data: dict, output_path: str):
         """
 
     if not findings_rows:
-        findings_rows = "<tr><td colspan='5' style='text-align:center;'>No open targets discovered.</td></tr>"
+        findings_rows = "<tr><td colspan='7' style='text-align:center;'>No open targets discovered.</td></tr>"
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -41,12 +94,13 @@ def export_html_report(report_data: dict, output_path: str):
     <title>Audit Report - {report_data.get('subnet')}</title>
     <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }}
-        .card {{ max-width: 900px; margin: auto; background: #1e293b; border-radius: 8px; padding: 24px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
+        .card {{ max-width: 1000px; margin: auto; background: #1e293b; border-radius: 8px; padding: 24px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
         h1 {{ color: #38bdf8; margin-top: 0; font-size: 1.5rem; }}
         .meta {{ color: #94a3b8; font-size: 0.9rem; margin-bottom: 20px; }}
         table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
         th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #334155; }}
         th {{ background: #0f172a; color: #cbd5e1; }}
+        code {{ background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #38bdf8; }}
         .badge {{ padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }}
         .open {{ background: #ef4444; color: white; }}
     </style>
@@ -64,6 +118,8 @@ def export_html_report(report_data: dict, output_path: str):
             <thead>
                 <tr>
                     <th>IP Address</th>
+                    <th>MAC Address</th>
+                    <th>Vendor</th>
                     <th>Port</th>
                     <th>Status</th>
                     <th>Device Model</th>
@@ -82,8 +138,13 @@ def export_html_report(report_data: dict, output_path: str):
         f.write(html_content)
 
 class TermuxSecAgent:
-    def __init__(self, subnet="192.168.8", adb_port=5555, max_threads=25, out_dir="reports"):
-        self.subnet = subnet
+    def __init__(self, subnet=None, adb_port=5555, max_threads=25, out_dir="reports"):
+        if not subnet or subnet.lower() == "auto":
+            self.subnet = get_local_subnet()
+            print(f"[*] Auto-detected local subnet: {self.subnet}.0/24")
+        else:
+            self.subnet = subnet
+
         self.adb_port = int(adb_port)
         self.max_threads = max_threads
         self.report_dir = out_dir
@@ -98,29 +159,17 @@ class TermuxSecAgent:
 
     def run_cmd(self, cmd_list, timeout=10):
         try:
-            res = subprocess.run(
-                cmd_list,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False
-            )
-            return {
-                "success": res.returncode == 0,
-                "stdout": res.stdout.strip(),
-                "stderr": res.stderr.strip()
-            }
-        except subprocess.TimeoutExpired:
-            return {"success": False, "stdout": "", "stderr": "Timeout"}
-        except FileNotFoundError:
-            return {"success": False, "stdout": "", "stderr": f"Tool '{cmd_list[0]}' missing"}
+            res = subprocess.run(cmd_list, capture_output=True, text=True, timeout=timeout, check=False)
+            return {"success": res.returncode == 0, "stdout": res.stdout.strip(), "stderr": res.stderr.strip()}
+        except Exception as e:
+            return {"success": False, "stdout": "", "stderr": str(e)}
 
     def check_port(self, ip: str, timeout=1.0) -> bool:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(timeout)
                 return s.connect_ex((ip, self.adb_port)) == 0
-        except (socket.timeout, socket.gaierror, OSError):
+        except Exception:
             return False
 
     def fingerprint_device(self, ip: str) -> dict:
@@ -138,7 +187,7 @@ class TermuxSecAgent:
         return info
 
     def scan_subnet(self, stealth_mode=False, output_format="json"):
-        print(f"[*] Subnet: {self.subnet}.0/24 | Target Port: {self.adb_port}")
+        print(f"[*] Scanning Subnet: {self.subnet}.0/24 | Target Port: {self.adb_port}")
         workers = 1 if stealth_mode else self.max_threads
         discovered_targets = []
         start_time = datetime.now()
@@ -164,7 +213,15 @@ class TermuxSecAgent:
         findings = []
         for host in discovered_targets:
             meta = self.fingerprint_device(host)
-            findings.append({"ip": host, "port": self.adb_port, "fingerprint": meta})
+            mac = get_mac_address(host)
+            vendor = lookup_vendor(mac)
+            findings.append({
+                "ip": host,
+                "mac": mac,
+                "vendor": vendor,
+                "port": self.adb_port,
+                "fingerprint": meta
+            })
 
         duration = (datetime.now() - start_time).total_seconds()
         report_data = {
@@ -191,7 +248,7 @@ class TermuxSecAgent:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="TermuxSecAgent CLI")
-    parser.add_argument("-s", "--subnet", default="192.168.8", help="Subnet (default: 192.168.8)")
+    parser.add_argument("-s", "--subnet", default="auto", help="Subnet (default: auto)")
     parser.add_argument("-p", "--port", type=int, default=5555, help="Port (default: 5555)")
     parser.add_argument("--stealth", action="store_true", help="Slow single-thread scan")
     parser.add_argument("-o", "--format", choices=["json", "html", "both"], default="json")
@@ -200,9 +257,5 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    agent = TermuxSecAgent(
-        subnet=args.subnet,
-        adb_port=args.port,
-        out_dir=args.out_dir
-    )
+    agent = TermuxSecAgent(subnet=args.subnet, adb_port=args.port, out_dir=args.out_dir)
     agent.scan_subnet(stealth_mode=args.stealth, output_format=args.format)
