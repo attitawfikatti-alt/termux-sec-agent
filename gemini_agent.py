@@ -9,7 +9,6 @@ if not api_key:
     sys.exit(1)
 
 def check_host_alive(target: str) -> str:
-    """فحص وصول الجهاز عبر Ping"""
     try:
         res = subprocess.run(["ping", "-c", "2", "-W", "2", target], capture_output=True, text=True, check=False)
         return res.stdout if res.returncode == 0 else f"الجهاز لا يستجيب: {res.stderr}"
@@ -17,7 +16,6 @@ def check_host_alive(target: str) -> str:
         return f"فشل تشغيل ping: {e}"
 
 def scan_open_ports(target: str) -> str:
-    """فحص المنافذ السريعة عبر nmap"""
     try:
         res = subprocess.run(["nmap", "-Pn", "-sT", "-F", target], capture_output=True, text=True, check=False)
         return res.stdout if res.returncode == 0 else f"خطأ في nmap: {res.stderr}"
@@ -58,17 +56,26 @@ tools_schema = [
     }
 ]
 
-url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key={api_key}"
+# استخدام النموذج الأحدث والمستقر
+url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
 headers = {"Content-Type": "application/json"}
 
-def run_agent(user_prompt: str):
-    print(f"\n\033[1;34m[+] المستخدم:\033[0m {user_prompt}")
-    
+def run_agent(input_arg: str):
+    # فحص ما إذا كان المدخل مسار ملف تقرير موجود
+    if os.path.isfile(input_arg):
+        print(f"\n\033[1;34m[+] قراءة التقرير من الملف:\033[0m {input_arg}")
+        with open(input_arg, "r", encoding="utf-8") as f:
+            content = f.read()
+        user_prompt = f"قم بتحليل تقرير الفحص الأمني التالي، وحدد المخاطر المحتملة والمنافذ الخطرة، وقدم توصيات دفاعية لتأمين الشبكة:\n\n{content}"
+    else:
+        user_prompt = input_arg
+        print(f"\n\033[1;34m[+] المستخدم:\033[0m {user_prompt}")
+
     messages = [
         {"role": "user", "parts": [{"text": user_prompt}]}
     ]
 
-    max_steps = 5  # حد أمان لمنع التكرار اللانهائي
+    max_steps = 5
     step = 0
 
     while step < max_steps:
@@ -78,16 +85,20 @@ def run_agent(user_prompt: str):
             "tools": tools_schema
         }
 
-        res = requests.post(url, headers=headers, json=payload).json()
-        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            res = response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"\033[1;31m[-] فشل الاتصال بالخادم:\033[0m {e}")
+            return
+
         if "error" in res:
-            print(f"\033[1;31m[-] خطأ من الخادم:\033[0m {res['error']}")
+            print(f"\033[1;31m[-] خطأ من الواجهة البرمجية:\033[0m {res['error'].get('message', res['error'])}")
             return
 
         candidate = res.get("candidates", [{}])[0].get("content", {})
         parts = candidate.get("parts", [])
 
-        # استخراج استدعاءات الدوال
         function_calls = [p["functionCall"] for p in parts if "functionCall" in p]
 
         if function_calls:
@@ -98,13 +109,12 @@ def run_agent(user_prompt: str):
                 f_name = call["name"]
                 f_args = call.get("args", {})
                 print(f"\033[1;33m[*] [خطوة {step}] الوكيل يستدعي محلياً: {f_name}({f_args})\033[0m")
-                
+
                 if f_name in AVAILABLE_FUNCTIONS:
                     output = AVAILABLE_FUNCTIONS[f_name](**f_args)
                 else:
                     output = "الدالة غير متوفرة."
 
-                # كائن JSON متوافق مع معايير واجهة Gemini
                 function_response_parts.append({
                     "functionResponse": {
                         "name": f_name,
@@ -113,14 +123,13 @@ def run_agent(user_prompt: str):
                 })
 
             messages.append({
-                "role": "user",
+                "role": "function",
                 "parts": function_response_parts
             })
 
         else:
-            # عندما ينتهي النموذج من استدعاء الأدوات ويصدر التقرير النهائي
             text_response = "".join([p.get("text", "") for p in parts])
-            print(f"\n\033[1;32m[+] تقرير التحليل النهائي:\033[0m\n{text_response}\n")
+            print(f"\n\033[1;32m[+] تقرير التحليل الأمني والتوصيات:\033[0m\n{text_response}\n")
             break
 
 if __name__ == "__main__":
