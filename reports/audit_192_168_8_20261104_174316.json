@@ -1,0 +1,21 @@
+{
+    "subnet": "192.168.8.0/24",
+    "port": 5555,
+    "stealth": false,
+    "scan_duration_seconds": 11.37,
+    "timestamp": "2026-11-04 17:43:16",
+    "findings": [
+        {
+            "ip": "192.168.8.1",
+            "mac": "58:2A:F7:34:3D:6A",
+            "vendor": "Generic / Unregistered Vendor",
+            "port": 5555,
+            "risk_level": "CRITICAL",
+            "risk_color": "#ef4444",
+            "fingerprint": {
+                "model": "",
+                "android_version": ""
+            }
+        }
+    ]
+}

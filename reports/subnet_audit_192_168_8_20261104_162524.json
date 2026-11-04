@@ -1,0 +1,19 @@
+{
+    "subnet": "192.168.8.0/24",
+    "port": 5555,
+    "scan_duration_seconds": 16.55,
+    "timestamp": "2026-11-04T16:25:24.895499",
+    "targets_found_count": 1,
+    "findings": [
+        {
+            "ip": "192.168.8.1",
+            "port": 5555,
+            "fingerprint": {
+                "connected": true,
+                "model": "",
+                "android_version": "",
+                "device_name": ""
+            }
+        }
+    ]
+}

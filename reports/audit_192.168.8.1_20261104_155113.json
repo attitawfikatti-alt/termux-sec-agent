@@ -1,0 +1,28 @@
+{
+    "target": "192.168.8.1",
+    "timestamp": "2026-11-04T15:51:13.163657",
+    "open_network_ports": [
+        23,
+        80,
+        5555
+    ],
+    "adb_connected": true,
+    "system_audit": {
+        "root_privileges": true,
+        "device_model": "",
+        "android_version": "",
+        "third_party_packages": [
+            "/system/bin/sh: pm: not found"
+        ],
+        "internal_listening_ports": [
+            "tcp        0      0 127.0.0.1:5037          0.0.0.0:*               LISTEN",
+            "tcp        0      0 0.0.0.0:5555            0.0.0.0:*               LISTEN",
+            "tcp        0      0 127.0.0.1:5916          0.0.0.0:*               LISTEN",
+            "tcp        0      0 :::80                   :::*                    LISTEN",
+            "tcp        0      0 :::53                   :::*                    LISTEN",
+            "tcp        0      0 :::23                   :::*                    LISTEN",
+            "tcp        0      0 :::5080                 :::*                    LISTEN",
+            "tcp        0      0 :::443                  :::*                    LISTEN"
+        ]
+    }
+}
