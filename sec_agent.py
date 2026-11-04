@@ -23,12 +23,37 @@ OUI_DATABASE = {
     "00:0C:43": "Ralink Technology", "10:7B:44": "TP-Link", "50:D4:F7": "TP-Link"
 }
 
-def get_mac_address(ip: str) -> str:
-    """استخراج عنوان MAC مع تنشيط كاش ARP مسبقاً"""
+def send_notification(title: str, content: str):
+    """إرسال إشعار للنظام عبر termux-api"""
     try:
-        # إرسال بنق سريع خفيف لتسجيل الجهاز في جدول ARP
+        subprocess.run([
+            "termux-notification",
+            "--title", title,
+            "--content", content,
+            "--priority", "high"
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def load_known_hosts(filepath: str) -> set:
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+    return set()
+
+def save_known_hosts(filepath: str, hosts: set):
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(sorted(list(hosts)), f, indent=4)
+    except Exception:
+        pass
+
+def get_mac_address(ip: str) -> str:
+    try:
         subprocess.run(["ping", "-c", "1", "-W", "1", ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
         if os.path.exists("/proc/net/arp"):
             with open("/proc/net/arp", "r") as f:
                 for line in f.readlines()[1:]:
@@ -37,7 +62,6 @@ def get_mac_address(ip: str) -> str:
                         mac = parts[3].upper()
                         if mac != "00:00:00:00:00:00":
                             return mac
-                            
         res = subprocess.run(["ip", "neigh", "show", ip], capture_output=True, text=True, timeout=2)
         if res.returncode == 0 and "lladdr" in res.stdout:
             parts = res.stdout.strip().split()
@@ -62,10 +86,8 @@ def get_local_subnet() -> str:
         return "192.168.8"
 
 def assess_risk(port_open: bool, meta: dict) -> tuple:
-    """تقييم الخطورة الأمنية بناءً على استجابة الخدمة المفتوحة"""
     if not port_open:
         return "LOW", "#10b981"
-    # إذا كان ADB متصلاً وجلب طراز النظام بدون حظر
     if meta.get("model") != "Unknown":
         return "CRITICAL", "#ef4444"
     return "HIGH", "#f97316"
@@ -160,6 +182,7 @@ class TermuxSecAgent:
         self.max_threads = max_threads
         self.report_dir = out_dir
         self.log_dir = "logs"
+        self.state_file = os.path.join(self.log_dir, "known_hosts.json")
         os.makedirs(self.report_dir, exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
 
@@ -197,8 +220,9 @@ class TermuxSecAgent:
             self.run_cmd(["adb", "disconnect", target], timeout=3)
         return info
 
-    def scan_subnet(self, stealth_mode=False, output_format="json"):
-        print(f"[*] Scanning Subnet: {self.subnet}.0/24 | Target Port: {self.adb_port}")
+    def scan_subnet(self, stealth_mode=False, output_format="json", silent_progress=False) -> list:
+        if not silent_progress:
+            print(f"[*] Scanning Subnet: {self.subnet}.0/24 | Target Port: {self.adb_port}")
         workers = 1 if stealth_mode else self.max_threads
         discovered_targets = []
         start_time = datetime.now()
@@ -210,16 +234,19 @@ class TermuxSecAgent:
             if stealth_mode:
                 time.sleep(random.uniform(0.1, 0.4))
             if self.check_port(target_ip):
-                sys.stdout.write(f"\r[!] Discovered: {target_ip}:{self.adb_port}           \n")
-                sys.stdout.flush()
+                if not silent_progress:
+                    sys.stdout.write(f"\r[!] Discovered: {target_ip}:{self.adb_port}           \n")
+                    sys.stdout.flush()
                 discovered_targets.append(target_ip)
             scanned_count += 1
-            sys.stdout.write(f"\r[*] Scanning progress: [{scanned_count}/254] hosts...")
-            sys.stdout.flush()
+            if not silent_progress:
+                sys.stdout.write(f"\r[*] Scanning progress: [{scanned_count}/254] hosts...")
+                sys.stdout.flush()
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             executor.map(probe, range(1, 255))
-        print()
+        if not silent_progress:
+            print()
 
         findings = []
         for host in discovered_targets:
@@ -254,12 +281,50 @@ class TermuxSecAgent:
             json_path = os.path.join(self.report_dir, f"{base_name}.json")
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(report_data, f, indent=4)
-            print(f"[+] JSON report saved: {json_path}")
+            if not silent_progress:
+                print(f"[+] JSON report saved: {json_path}")
 
         if output_format in ["html", "both"]:
             html_path = os.path.join(self.report_dir, f"{base_name}.html")
             export_html_report(report_data, html_path)
-            print(f"[+] HTML report saved: {html_path}")
+            if not silent_progress:
+                print(f"[+] HTML report saved: {html_path}")
+
+        return findings
+
+    def run_daemon(self, interval_seconds=300, stealth=False, output_format="json"):
+        print(f"[+] Daemon mode active. Monitoring every {interval_seconds}s (Press Ctrl+C to stop)...")
+        known = load_known_hosts(self.state_file)
+        self.log(f"Daemon started. Known hosts count: {len(known)}")
+
+        try:
+            while True:
+                current_time = datetime.now().strftime("%H:%M:%S")
+                print(f"[{current_time}] Running scheduled network check...")
+                
+                # فحص الشبكة
+                findings = self.scan_subnet(stealth_mode=stealth, output_format=output_format, silent_progress=True)
+                current_hosts = {f["ip"] for f in findings}
+                
+                # كشف الأجهزة الجديدة
+                new_hosts = current_hosts - known
+                if new_hosts:
+                    for new_ip in new_hosts:
+                        alert_msg = f"New target detected: {new_ip}:{self.adb_port}"
+                        print(f"[ALERT] {alert_msg}")
+                        self.log(alert_msg)
+                        send_notification("Security Alert - New Target", alert_msg)
+                    
+                    # تحديث السجل المحفوظ
+                    known.update(new_hosts)
+                    save_known_hosts(self.state_file, known)
+                else:
+                    print(f"[{current_time}] No new targets detected. Sleeping for {interval_seconds}s.")
+
+                time.sleep(interval_seconds)
+        except KeyboardInterrupt:
+            print("\n[*] Stopping daemon mode cleanly.")
+            self.log("Daemon stopped by user.")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="TermuxSecAgent CLI")
@@ -268,9 +333,15 @@ def parse_args():
     parser.add_argument("--stealth", action="store_true", help="Slow single-thread scan")
     parser.add_argument("-o", "--format", choices=["json", "html", "both"], default="json")
     parser.add_argument("--out-dir", default="reports", help="Reports directory")
+    parser.add_argument("--daemon", action="store_true", help="Run in periodic background daemon mode")
+    parser.add_argument("--interval", type=int, default=300, help="Interval in seconds for daemon checks (default: 300)")
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_args()
     agent = TermuxSecAgent(subnet=args.subnet, adb_port=args.port, out_dir=args.out_dir)
-    agent.scan_subnet(stealth_mode=args.stealth, output_format=args.format)
+    
+    if args.daemon:
+        agent.run_daemon(interval_seconds=args.interval, stealth=args.stealth, output_format=args.format)
+    else:
+        agent.scan_subnet(stealth_mode=args.stealth, output_format=args.format)
