@@ -43,3 +43,8 @@ The `v1.0.0` release of `termux-sec-agent` demonstrates strong systems-level Pyt
 | **Practical Utility & Readiness** | **9.1 / 10** | Production-ready `v1.0.0` release provides immediate operational value for network administrators, security enthusiasts, and field diagnostics. |
 
 **Verdict:** A mature, practical security automation utility engineered specifically for mobile Linux environments, well-positioned for community adoption and modular plugin expansion.
+
+## What's New in v1.1.0
+- **Multi-Port Defensive Audit (`--audit-ports`):** Scans critical LAN ports (`22, 23, 53, 80, 443, 5555, 8008, 8080`) with automated risk scoring and remediation guidance.
+- **External OUI Vendor Database (`oui_vendors.json`):** Offline MAC vendor identification for routers, phones, and Smart TVs.
+- **Trusted Device Whitelisting (`trusted_macs.txt`):** Distinguishes verified devices (`TRUSTED`) from unknown hosts (`UNVERIFIED`) in daemon alerts and HTML reports.
